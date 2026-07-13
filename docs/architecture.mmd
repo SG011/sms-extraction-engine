@@ -1,0 +1,115 @@
+flowchart TD
+
+    %% ── SOURCE SYSTEMS ──────────────────────────────────────────────────────────
+    subgraph SOURCES["Source Systems"]
+        MA["Mobile Apps"]
+        WH["Webhooks"]
+        IDB["Internal DB"]
+    end
+
+    %% ── INBOUND KAFKA TOPIC ─────────────────────────────────────────────────────
+    SI["sms-inbound"]
+
+    MA --> SI
+    WH --> SI
+    IDB --> SI
+
+    %% ── CONSUMER GROUP 1 ────────────────────────────────────────────────────────
+    subgraph CG1["Consumer Group 1  —  Extraction  (sms-inbound)"]
+        C1_1{"① Non-English check"}
+        C1_SKIP(["Non-English → return"])
+        C1_2["② Normalize\nRules preloaded at startup\nPub/sub pushes updated rules → update in-memory directly"]
+        C1_3["③ Load entity list\nSender-entities preloaded at startup\nPub/sub pushes updated list → update in-memory directly"]
+        C1_4["④ Extract entities"]
+        C1_5{"⑤ Template match\nTemplates preloaded at startup\nPub/sub pushes updated template → update in-memory directly"}
+        C1_HIT["Push to results-queue · ACK offset"]
+        C1_MISS["Push to learning-queue · ACK offset"]
+        C1_FAIL(["Fails → No ACK"])
+    end
+
+    SI --> C1_1
+    C1_1 -->|"non-English"| C1_SKIP
+    C1_1 -->|"English"| C1_2 --> C1_3 --> C1_4 --> C1_5
+    C1_5 -->|"HIT"| C1_HIT
+    C1_5 -->|"MISS"| C1_MISS
+
+    %% ── LEARNING KAFKA TOPIC ────────────────────────────────────────────────────
+    LQ["learning-queue"]
+    C1_MISS -->|"enqueue"| LQ
+
+    %% ── CONSUMER GROUP 2 ────────────────────────────────────────────────────────
+    subgraph CG2["Consumer Group 2  —  Learning  (learning-queue)"]
+        C2_1["① Read entity list from in-memory cache\n(preloaded at startup · updated via pub/sub)"]
+        C2_2["② Re-extract entities"]
+        C2_3{"③ Template match\n(templates from in-memory cache)"}
+        C2_HIT1["Push to results-queue · ACK offset"]
+        C2_LOCK["Acquire Redis lock\n(per senderId)"]
+        C2_4["④ Re-read entity list + templates from in-memory cache\n(pub/sub may have updated them while waiting for lock)"]
+        C2_5["⑤ Re-extract entities"]
+        C2_6{"⑥ Final template match\n(re-read templates from in-memory cache)"}
+        C2_HIT2["Push to results-queue · ACK offset"]
+        C2_LLM["Call LLM"]
+        C2_SAVE["Push to results-queue · ACK offset"]
+        C2_FAIL(["Fails → No ACK"])
+    end
+
+    LQ --> C2_1
+    C2_1 --> C2_2 --> C2_3
+    C2_3 -->|"HIT"| C2_HIT1
+    C2_3 -->|"MISS"| C2_LOCK
+    C2_LOCK --> C2_4 --> C2_5 --> C2_6
+    C2_6 -->|"HIT"| C2_HIT2
+    C2_6 -->|"still MISS"| C2_LLM --> C2_SAVE
+
+    C2_LOCK <-->|"lock / unlock"| REDIS[("Redis\nCluster")]
+    C2_LLM  <-->|"API"| OPENAI["OpenAI\nGPT-5.5"]
+
+    %% ── RESULTS KAFKA TOPIC ─────────────────────────────────────────────────────
+    RQ["results-queue"]
+    C1_HIT  -->|"enqueue"| RQ
+    C2_HIT1 -->|"enqueue"| RQ
+    C2_HIT2 -->|"enqueue"| RQ
+    C2_SAVE -->|"enqueue"| RQ
+
+    %% ── REDUNDANT LLM QUEUE ─────────────────────────────────────────────────────
+    RLQ["redundant-llm-queue"]
+    C2_REDUNDANT -->|"enqueue"| RLQ
+
+    subgraph CG4["Consumer Group 4  —  Redundant LLM Analyser"]
+        C4_1["Read from redundant-llm-queue"]
+        C4_2["Alert team\nLog full details — raw SMS · normalized SMS\ncandidates · why match failed\nACK offset"]
+    end
+
+    RLQ --> C4_1 --> C4_2
+
+    %% ── CONSUMER GROUP 3 — DynamoDB writer ─────────────────────────────────────
+    subgraph CG3["Consumer Group 3  —  DynamoDB Writer"]
+        C3_1["Read from results-queue"]
+        C3_CHECK{"templateId already\nexists in DynamoDB?"}
+        C3_2["Write to DynamoDB\nRelease Redis lock · ACK offset"]
+        C3_REDUNDANT["Push to redundant-llm-queue\nRelease Redis lock · ACK offset"]
+        C3_FAIL(["Fails → No ACK"])
+    end
+
+    RQ --> C3_1 --> C3_CHECK
+    C3_CHECK -->|"NO — new template"| C3_2
+    C3_CHECK -->|"YES — redundant"| C3_REDUNDANT
+    C3_2 --> DDB[("DynamoDB\ntemplates · entities · results")]
+
+    %% ── DYNAMODB STREAMS → LAMBDA → REDIS ──────────────────────────────────────
+    DDB -->|"DynamoDB Stream\n(on every write)"| LAMBDA["AWS Lambda\nreads stream event\npublishes to Redis pub/sub\n→ all instances update templates +\nsender-entities in-memory cache directly"]
+    LAMBDA -->|"publish"| REDIS
+
+    %% ── STARTUP PRELOAD ─────────────────────────────────────────────────────────
+    STARTUP["At startup: scan DynamoDB\n→ load normalization rules into memory\n→ load all sender-entities into memory\n→ load all templates into memory"]
+    STARTUP -.->|"read once"| DDB
+
+    %% ── OBSERVABILITY ALERTS ────────────────────────────────────────────────────
+    subgraph OBS["Observability Alerts"]
+        AL["• Hit rate < 95% per sender\n• LLM call rate spike\n• LLM spend > budget / hr\n• Redundant LLM calls > 0\n• learning-queue lag growing\n• redundant-llm-queue lag growing\n• sms-inbound consumer lag growing\n• p95 template hit latency > 25s"]
+    end
+
+    %% ── NOTES ───────────────────────────────────────────────────────────────────
+    DEDUP["Deduplication\nsourceMessageId in Kafka payload\nDynamoDB conditional write:\nattribute_not_exists(messageId)"]
+
+    OFFSETS["Offset Commit Rules\nsms-inbound / learning-queue → after enqueue to next topic\nresults-queue (CG3) → after DynamoDB write + lock release\nRedis pub/sub triggered automatically via DynamoDB Streams → Lambda"]

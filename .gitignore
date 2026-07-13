@@ -1,0 +1,17 @@
+# Maven
+target/
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Logs
+logs/
+
+# OS
+.DS_Store
+
+# Superpowers internal
+.superpowers/

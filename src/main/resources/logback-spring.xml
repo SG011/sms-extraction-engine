@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>/Users/sahajgupta/Documents/sms-extraction-engine/logs/extraction.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>/Users/sahajgupta/Documents/sms-extraction-engine/logs/extraction.%d{yyyy-MM-dd_HH}.log</fileNamePattern>
+            <maxHistory>24</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Detailed debug logs for extraction pipeline -->
+    <logger name="com.sms.extraction.service.impl.SmsExtractionServiceImpl" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </logger>
+
+    <logger name="com.sms.extraction.service.impl.TemplateMatchingServiceImpl" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </logger>
+
+    <logger name="com.sms.extraction.service.impl.EntityExtractionServiceImpl" level="INFO" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </logger>
+
+    <!-- Keep Spring and AWS noise at WARN -->
+    <logger name="org.springframework" level="WARN"/>
+    <logger name="software.amazon" level="WARN"/>
+    <logger name="org.apache" level="WARN"/>
+    <logger name="com.fasterxml" level="WARN"/>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+
+</configuration>

@@ -1,0 +1,35 @@
+Method-1:-
+    Use redis:-
+
+    Pros:-
+    Simple
+
+    Cons:-
+    Latency
+
+Method-2:-
+    Use In-memory:-
+
+    Pros:-
+    Cost can be slightly less as compared to method 1
+
+    Cons:-
+    Locking mechanism can be complex to implement with can lead to extra cost as the training will happen on stale data.
+
+Method-3:-
+
+    Use Dynamo DB:-
+
+    Pros:-
+    Simple to implement
+
+    Cons:-
+    Cost will be very high in the learning phase.
+
+
+
+My Recommendation:-
+Method-2 
+
+Because its the balanace of simplicity, cost, throughput, scale and latency.
+

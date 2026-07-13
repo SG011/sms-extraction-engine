@@ -1,0 +1,78 @@
+SMSKafkaConsumer
+    |
+SmsExtractionServiceImpl(This is your orchestrator)
+    |
+NormalizationServiceImpl(This service is for Normalization)
+    |
+EntityExtractionServiceImpl(This loads the entities)
+    |
+EntityExtractionServiceImpl(This extracts the entities)-> This returns the list of CandidateTemplate to the SmsExtractionServiceImpl
+    |
+TemplateMatchingServiceImpl(TemplateMatchingServiceImpl.match())-> HandlerChain.handle(Chain of Responsibility)->Returns the TemplateMatchOutcome to the SmsExtractionServiceImpl
+    |
+If hit
+SmsExtractionServiceImpl unwraps the TemplateMatchResult:
+- match.getTemplate() → the matched LearnedTemplate (has category, subcategory, intent, confidence, List<EntitySnapshot>)
+- match.getWinningCandidate() → the CandidateTemplate that produced the hash hit (has the actual extracted values)
+    |
+Calls TemplateMatchingService.buildExtractedEntities(winningCandidate, learnedTemplate.getEntitySnapshots(), normalizedSms) → maps each
+  ExtractedValue to its correct semanticType using EntitySnapshot boundaries → returns Map<String, String> e.g. {TRANSACTION_AMOUNT: "1000", 
+  MERCHANT: "SWIGGY"}.
+    |
+ExtractionResultServiceImpl.save() save the result.
+
+
+
+    |
+If MISS:-
+
+  matchOutcome.isMatched() = false.
+
+  1. Claim the LLM slot
+  SenderLearningStateService.tryClaimLearning(senderId) → Redis setIfAbsent → only one thread wins per sender.
+
+  Losing threads → waitForCompletion(senderId) → parks on Redis pub/sub via CountDownLatch. When winner publishes → wakes up → retries loadEntities +
+   extract + match. If hit → returns result. If still miss → competes for next slot.
+
+  2. Pre-LLM check (winning thread)
+  Runs retryAfterLearningComplete() one more time — in case another concurrent LLM call just saved the template a millisecond ago. If hit → releases
+  lock → returns.
+  
+  3. Call LLM
+  Acquires llmSemaphore. Calls LlmClient.call(normalizedSms, freshEntities) → OpenAiLlmClient builds prompt, calls OpenAI, parses JSON into
+  LlmResponse containing List<LlmEntityInfo>, canonical template, category, confidence.
+  
+  4. Process LLM response
+  LlmResponseMapper converts:
+  - buildEntitySnapshots(llmResponse) → List<EntitySnapshot>
+  - buildExtractedValuesFromLlm(llmResponse, normalizedSms) → List<ExtractedValue> (for hash computation)
+  - buildExtractedEntitiesFromLlm(llmResponse) → Map<String,String> (for result)
+
+  HashUtil computes:
+  - templateId = SHA256(senderId + "::" + canonicalTemplate)
+  - staticTextHash
+  - placeholderSequenceHash
+
+  5. Redundancy check
+  TemplateMatchingService.existsById(templateId) → checks if another thread already saved this template. If redundant → increments metric but
+  continues.
+
+  6. Save template
+  TemplateMatchingService.saveTemplate(learnedTemplate) → TemplateRepository → DynamoDB write.
+
+  7. Update entities
+  EntityExtractionService.updateGlobalEntities(senderId, existing, llmResponse) → EntityExtractionServiceImpl reloads latest entities from
+  EntityRepository, merges new boundary pairs and regex variants (no overwrites), saves back via EntityRepository → DynamoDB write.
+  
+  8. Release lock and notify
+  SenderLearningStateService.setState(LEARNED) → deletes Redis key.
+  SenderLearningStateService.publishCompletion(senderId) → publishes to Redis pub/sub → all waiting threads wake up.
+
+  9. Save result and return
+  Builds ExtractionResult. Calls ExtractionResultService.save(result) → DynamoDB write. Returns ExtractionResult to SmsKafkaConsumer.
+
+  ---
+  Then — Cache Update (Async)
+  
+  DynamoDB Streams fires on the template + entity writes → Lambda → Redis pub/sub → RedisPubSubSubscriber on all instances → InMemoryCacheUpdater
+  updates TemplateCache and EntityCache → all future requests for this sender served from memory.
