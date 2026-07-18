@@ -1,6 +1,6 @@
 # sms-extraction-engine
 
-Distributed, sms parser backend built for 100M TPD. Java 25, Spring Boot 3.4, Kafka, DynamoDB, Redis.
+Distributed, sms parser backend built for 100M TPD. Java 25, Spring Boot 4, Kafka, DynamoDB, Redis.
 
 ## Architecture
 
@@ -16,4 +16,4 @@ mvn spring-boot:run -pl write-service   # port 8080
 
 ## Tech Stack
 
-Java 25 · Spring Boot 3.4 · Apache Kafka · Apache Cassandra 5 · Redis 7 · Testcontainers · Gatling
+Java 25 · Spring Boot 4 · Apache Kafka · DynamoDB · Redis 7 · Testcontainers · Gatling
