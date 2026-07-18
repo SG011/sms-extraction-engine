@@ -1,6 +1,6 @@
 # sms-extraction-engine
 
-Distributed, sms parser backend built for 100M TPD. Java 25, Spring Boot 3.4, Kafka, Cassandra, Redis.
+Distributed, sms parser backend built for 100M TPD. Java 25, Spring Boot 3.4, Kafka, DynamoDB, Redis.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ Parsing and getting the data of sms to run marketing campaign!
 ## Running Locally
 
 ```bash
-docker-compose up -d          # starts Kafka, Cassandra, Redis
+docker-compose up -d          # starts Kafka, DynamoDB, Redis
 mvn spring-boot:run -pl write-service   # port 8080
 ```
 
